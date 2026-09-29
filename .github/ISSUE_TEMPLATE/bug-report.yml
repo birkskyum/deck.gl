@@ -26,6 +26,7 @@ body:
       - React
       - Python/Jupyter notebook
       - MapboxOverlay
+      - MapLibreOverlay
       - GoogleMapsOverlay
       - CARTO
       - ArcGIS
