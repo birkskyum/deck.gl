@@ -94,7 +94,7 @@ overlay.setProps({
 });
 ```
 
-Draped layers stay pickable.
+Draped layers stay pickable. Layers follow the terrain only in the MapLibre view, so while the map has terrain, draped layers are not drawn in other views of the overlay.
 
 ### Methods
 
