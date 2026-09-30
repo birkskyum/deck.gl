@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) vis.gl contributors
 
-import {BitmapLayer, ScatterplotLayer} from '@deck.gl/layers';
+import {_flatten as flatten} from '@deck.gl/core';
+import {_TerrainExtension as TerrainExtension} from '@deck.gl/extensions';
+import {BitmapLayer, PathLayer, ScatterplotLayer} from '@deck.gl/layers';
 import {MapLibreOverlay} from '@deck.gl/maplibre';
 import {device} from '@deck.gl/test-utils';
 import {Map as MapLibreV4Map} from 'maplibre-gl-v4';
 import {Map as MapLibreV5Map} from 'maplibre-gl-v5';
 import {Map as MapLibreV6Map} from 'maplibre-gl-v6';
-import {test, expect} from 'vitest';
+import {test, expect, vi} from 'vitest';
 
 import {getMapLibreElevation} from '../../../modules/maplibre/src/compatibility';
 
@@ -258,3 +260,177 @@ for (const {version, MapClass} of MAPLIBRE_VERSIONS) {
     }
   });
 }
+
+/**
+ * Passes `renderTerrainHeightMap` to the deck.gl layer groups while the map has terrain, as MapLibre
+ * releases that share their terrain do. The releases used in tests cannot share it yet.
+ */
+function shareTerrain(map: MapLibreMap, renderTerrainHeightMap: (target: any) => void): void {
+  for (const id of map.getLayersOrder()) {
+    const group = (map.getLayer(id) as any)?.implementation;
+    if (id.startsWith('deck-maplibre-layer-group')) {
+      const render = group.render.bind(group);
+      group.render = (gl: WebGL2RenderingContext, options: object) =>
+        render(gl, map.getTerrain() ? {...options, renderTerrainHeightMap} : options);
+    }
+  }
+}
+
+/** Returns the north-west corner of a tile, or of a fraction of one */
+function tileToLngLat(x: number, y: number, z: number): [number, number] {
+  const n = Math.PI - (2 * Math.PI * y) / 2 ** z;
+  return [(x / 2 ** z) * 360 - 180, (180 / Math.PI) * Math.atan(Math.sinh(n))];
+}
+
+webglTest('MapLibreOverlay shares MapLibre terrain with TerrainExtension layers', async () => {
+  const container = document.createElement('div');
+  Object.assign(container.style, {width: '400px', height: '300px'});
+  document.body.append(container);
+  const demTileURL = await createDemTileURL(1000);
+
+  // A terrain tile, and a trail across it a quarter of the tile below its north edge
+  const tile = {canonical: {x: 4289, y: 2896, z: 13}, wrap: 0};
+  const [west, north] = tileToLngLat(tile.canonical.x, tile.canonical.y, 13);
+  const [east, south] = tileToLngLat(tile.canonical.x + 1, tile.canonical.y + 1, 13);
+  const trailLatitude = tileToLngLat(0, tile.canonical.y + 0.25, 13)[1];
+  const center: [number, number] = [(west + east) / 2, (north + south) / 2];
+
+  const map = new MapLibreV6Map({
+    container,
+    style: {
+      version: 8,
+      sources: {dem: {type: 'raster-dem', tiles: [demTileURL], tileSize: 256, maxzoom: 12}},
+      layers: [{id: 'labels', type: 'background', paint: {'background-opacity': 0}}]
+    },
+    center,
+    zoom: 13,
+    attributionControl: false
+  }) as unknown as MapLibreMap;
+  const gl = map.getCanvas().getContext('webgl2')!;
+  // The ground is 1000 meters high
+  const renderTerrainHeightMap = vi.fn(({texture}: {texture: WebGLTexture}) => {
+    const framebuffer = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearBufferfv(gl.COLOR, 0, [1000, 0, 0, 1]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(framebuffer);
+  });
+
+  try {
+    await new Promise<void>(resolve => map.once('load', () => resolve()));
+    const overlay = new MapLibreOverlay({
+      interleaved: true,
+      layers: [
+        new ScatterplotLayer<[number, number]>({
+          id: 'hut',
+          data: [center],
+          getPosition: d => d,
+          getRadius: 8,
+          radiusUnits: 'pixels',
+          pickable: true,
+          extensions: [new TerrainExtension()]
+        }),
+        new PathLayer<[number, number][]>({
+          id: 'trail',
+          data: [
+            [
+              [west - 0.01, trailLatitude],
+              [east + 0.01, trailLatitude]
+            ]
+          ],
+          getPath: d => d,
+          getColor: [255, 0, 0],
+          getWidth: 8,
+          widthUnits: 'pixels',
+          beforeId: 'labels',
+          pickable: true,
+          extensions: [new TerrainExtension()]
+        })
+      ]
+    });
+    map.addControl(overlay);
+    await waitForRender(() => Boolean(overlay._deck?.isInitialized));
+    const getDeckLayerIds = () => flatten(overlay._deck!.props.layers, Boolean).map(l => l.id);
+    shareTerrain(map, renderTerrainHeightMap);
+
+    map.setTerrain({source: 'dem'});
+    await waitForRender(
+      () => map.getLayersOrder().length === 4,
+      () => map.triggerRepaint()
+    );
+    expect(getDeckLayerIds()).toEqual(['maplibre-terrain', 'hut', 'trail']);
+    expect(map.getLayersOrder()).toEqual([
+      'deck-maplibre-drape-group-before:labels',
+      'deck-maplibre-layer-group-before:labels',
+      'labels',
+      'deck-maplibre-layer-group-last'
+    ]);
+    const drapeGroup = (map.getLayer('deck-maplibre-drape-group-before:labels') as any)
+      .implementation;
+    expect(drapeGroup.terrainTileRevision, 'Terrain tiles are drawn again').toBeGreaterThan(0);
+
+    // The hut is placed by a height map of MapLibre's terrain
+    expect(renderTerrainHeightMap).toHaveBeenCalled();
+    const [{texture, width, height, bounds}] = renderTerrainHeightMap.mock.lastCall!;
+    expect(texture).toBeInstanceOf(WebGLTexture);
+    expect(width > 0 && height > 0).toBe(true);
+    const x = (tile.canonical.x + 0.5) / 2 ** 13;
+    const y = (tile.canonical.y + 0.5) / 2 ** 13;
+    expect(
+      bounds[0] < x && x < bounds[2] && bounds[1] < y && y < bounds[3],
+      'Height map bounds'
+    ).toBe(true);
+
+    // Both layers are picked on the ground
+    const viewport = overlay._deck!.getViewports()[0];
+    const [hutX, hutY] = viewport.project([...center, 1000]);
+    expect(overlay.pickObject({x: hutX, y: hutY})?.layer?.id).toBe('hut');
+    const [trailX, trailY] = viewport.project([center[0] + 0.01, trailLatitude, 1000]);
+    expect(overlay.pickObject({x: trailX, y: trailY})?.layer?.id).toBe('trail');
+
+    // The trail is draped into the terrain tile, north up with the first row south
+    const texture2 = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture2);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 256, 256);
+    const tileFramebuffer = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, tileFramebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture2, 0);
+    gl.viewport(0, 0, 256, 256);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    drapeGroup.renderToTerrainTile(gl, {tileID: tile, width: 256, height: 256});
+    gl.bindFramebuffer(gl.FRAMEBUFFER, tileFramebuffer);
+    const pixels = new Uint8Array(256 * 256 * 4);
+    gl.readPixels(0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const trailRows = new Set<number>();
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i] > 200 && pixels[i + 3] > 200) {
+        trailRows.add(Math.floor(i / 4 / 256));
+      }
+    }
+    expect(trailRows.size, 'Trail is draped').toBeGreaterThan(0);
+    expect(Math.min(...trailRows) >= 186 && Math.max(...trailRows) <= 198, 'Trail rows').toBe(true);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(tileFramebuffer);
+    gl.deleteTexture(texture2);
+
+    map.setTerrain(null);
+    await waitForRender(
+      () => map.getLayersOrder().length === 3 && getDeckLayerIds().length === 2,
+      () => map.triggerRepaint()
+    );
+    expect(getDeckLayerIds()).toEqual(['hut', 'trail']);
+    expect(map.getLayersOrder()).toEqual([
+      'deck-maplibre-layer-group-before:labels',
+      'labels',
+      'deck-maplibre-layer-group-last'
+    ]);
+    map.removeControl(overlay);
+  } finally {
+    map.remove();
+    container.remove();
+    URL.revokeObjectURL(demTileURL);
+  }
+});

@@ -2,9 +2,19 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) vis.gl contributors
 
+/** What MapLibre's `renderTerrainHeightMap` draws the terrain elevation into */
+export type MapLibreHeightMapTarget = {
+  texture: WebGLTexture;
+  width: number;
+  height: number;
+  bounds: [minX: number, minY: number, maxX: number, maxY: number];
+};
+
 export type MapLibreRenderParameters = {
   farZ: number;
   nearZ: number;
+  /** Set while the map has terrain, by MapLibre releases that share their terrain with custom layers */
+  renderTerrainHeightMap?: (target: MapLibreHeightMapTarget) => void;
 };
 
 type CompatibleMapLibreMap = {

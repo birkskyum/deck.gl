@@ -9,7 +9,9 @@ import {
   getMapLibreDefaultView,
   getMapLibreViewState,
   MAPLIBRE_VIEW_ID,
-  removeMapLibreDeckInstance
+  removeMapLibreDeckInstance,
+  getMapLibreDeckLayers,
+  getMapLibreTerrain
 } from './deck-utils';
 import {getMapLibreProjection} from './compatibility';
 import {resolveMapLibreLayerGroups} from './resolve-layer-groups';
@@ -85,6 +87,7 @@ export default class MapLibreOverlay implements IControl {
     if (this._deck && this._map) {
       this._deck.setProps({
         ...this._props,
+        layers: getMapLibreDeckLayers(this._map, this._props.layers),
         views: this._getViews(this._map),
         parameters: {
           ...getMapLibreDefaultParameters(this._map, this._interleaved),
@@ -226,6 +229,13 @@ export default class MapLibreOverlay implements IControl {
     });
 
     map.on('styledata', this._handleStyleChange);
+    map.on('sourcedata', this._handleSourceData);
+    map.on('terrain', this._handleTerrainChange);
+    const terrain = getMapLibreTerrain(map);
+    if (terrain) {
+      terrain.onDrapedGroupsChange = () =>
+        resolveMapLibreLayerGroups(map, this._props.layers, this._props.layers);
+    }
     resolveMapLibreLayerGroups(map, [], this._props.layers);
 
     return document.createElement('div');
@@ -247,6 +257,8 @@ export default class MapLibreOverlay implements IControl {
 
   private _onRemoveInterleaved(map: MapLibreMap): void {
     map.off('styledata', this._handleStyleChange);
+    map.off('sourcedata', this._handleSourceData);
+    map.off('terrain', this._handleTerrainChange);
     try {
       resolveMapLibreLayerGroups(map, this._props.layers, []);
     } finally {
@@ -263,6 +275,16 @@ export default class MapLibreOverlay implements IControl {
     if (getMapLibreProjection(this._map)) {
       this._deck?.setProps({views: this._getViews(this._map)});
     }
+  };
+
+  // `map.isStyleLoaded()` also waits for sources, so the last `styledata` event can fire
+  // before layer groups can be added. Retry as sources finish loading.
+  private _handleSourceData = () => {
+    resolveMapLibreLayerGroups(this._map, this._props.layers, this._props.layers);
+  };
+
+  private _handleTerrainChange = () => {
+    resolveMapLibreLayerGroups(this._map, this._props.layers, this._props.layers);
   };
 
   private _updateContainerSize = () => {

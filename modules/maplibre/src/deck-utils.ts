@@ -10,9 +10,11 @@ import {
   type MapLibreRenderParameters
 } from './compatibility';
 import {getMapLibreLayerGroupId} from './layer-utils';
+import {MapLibreTerrain} from './terrain';
+import MapLibreTerrainLayer from './terrain-layer';
 
-import type {DeckProps, Layer, MapViewState, Viewport} from '@deck.gl/core';
-import type {Parameters} from '@luma.gl/core';
+import type {DeckProps, Layer, LayersList, MapViewState, Viewport} from '@deck.gl/core';
+import type {Device, Parameters} from '@luma.gl/core';
 import type {Map as MapLibreMap} from 'maplibre-gl';
 import type MapLibreLayerGroup from './layer-group';
 import type {MapLibreLayerProps} from './layer-utils';
@@ -28,6 +30,14 @@ type MapLibreDeckState = {
   moveListener: () => void;
   renderListener: () => void;
   watchingMove: boolean;
+  /** The map's terrain, which layers with the TerrainExtension follow while MapLibre shares it */
+  terrain: MapLibreTerrain;
+  /** Stands for the map's terrain among the deck.gl layers while MapLibre shares it */
+  terrainLayer: MapLibreTerrainLayer;
+  /** Whether the terrain layer is among the deck.gl layers */
+  terrainShared: boolean;
+  /** Whether MapLibre shared its terrain in the last frame that drew a layer group */
+  terrainSharedInFrame: boolean;
 };
 
 const MAPLIBRE_DECK_STATES = new WeakMap<MapLibreMap, MapLibreDeckState>();
@@ -119,6 +129,7 @@ export function createMapLibreDeckInstance(map: MapLibreMap, deck: Deck): Deck {
 
   const customRender = deck.props._customRender;
   const onLoad = deck.props.onLoad;
+  const terrain = new MapLibreTerrain(map, () => (deck as unknown as {device?: Device}).device);
   const state: MapLibreDeckState = {
     deck,
     watchingMove: false,
@@ -132,9 +143,14 @@ export function createMapLibreDeckInstance(map: MapLibreMap, deck: Deck): Deck {
     renderListener: () => {
       if (deck.isInitialized) {
         syncMapLibreElevation(deck, map);
+        syncMapLibreTerrain(map, state);
         afterMapLibreRender(deck, map);
       }
-    }
+    },
+    terrain,
+    terrainLayer: new MapLibreTerrainLayer({id: 'maplibre-terrain', externalTerrain: terrain}),
+    terrainShared: false,
+    terrainSharedInFrame: false
   };
   MAPLIBRE_DECK_STATES.set(map, state);
 
@@ -174,6 +190,34 @@ export function getMapLibreDeckInstance(map: MapLibreMap): Deck | undefined {
   return MAPLIBRE_DECK_STATES.get(map)?.deck;
 }
 
+export function getMapLibreTerrain(map: MapLibreMap): MapLibreTerrain | null {
+  return MAPLIBRE_DECK_STATES.get(map)?.terrain ?? null;
+}
+
+/** Returns the deck.gl layers of the map, with the layer that stands for its terrain while MapLibre shares it */
+export function getMapLibreDeckLayers(
+  map: MapLibreMap | undefined,
+  layers: LayersList = []
+): LayersList {
+  const state = map && MAPLIBRE_DECK_STATES.get(map);
+  return state?.terrainShared ? [state.terrainLayer, ...layers] : layers;
+}
+
+/**
+ * Adds the terrain layer once MapLibre shares its terrain with custom layers, which it does by passing
+ * them `renderTerrainHeightMap` while it has terrain, and removes it after
+ */
+function syncMapLibreTerrain(map: MapLibreMap, state: MapLibreDeckState): void {
+  if (state.terrainShared === state.terrainSharedInFrame) {
+    return;
+  }
+  const layers = (state.deck.props.layers as LayersList).filter(
+    layer => layer !== state.terrainLayer
+  );
+  state.terrainShared = state.terrainSharedInFrame;
+  state.deck.setProps({layers: getMapLibreDeckLayers(map, layers)});
+}
+
 export function removeMapLibreDeckInstance(map: MapLibreMap): void {
   const state = MAPLIBRE_DECK_STATES.get(map);
   if (!state) {
@@ -182,6 +226,7 @@ export function removeMapLibreDeckInstance(map: MapLibreMap): void {
 
   stopWatchingMove(map, state);
   map.off('render', state.renderListener);
+  state.terrain.finalize();
   state.deck.finalize();
   MAPLIBRE_DECK_STATES.delete(map);
 }
@@ -208,19 +253,28 @@ export function drawMapLibreLayerGroup(
     return;
   }
 
-  deck._drawLayers('maplibre-repaint', {
-    viewports: [currentViewport],
-    layerFilter: params => {
-      if (deck.props.layerFilter && !deck.props.layerFilter(params)) {
-        return false;
-      }
+  const state = MAPLIBRE_DECK_STATES.get(map);
+  if (state) {
+    state.terrainSharedInFrame = Boolean(renderParameters.renderTerrainHeightMap);
+    state.terrain.setRenderParameters(renderParameters);
+  }
+  try {
+    deck._drawLayers('maplibre-repaint', {
+      viewports: [currentViewport],
+      layerFilter: params => {
+        if (deck.props.layerFilter && !deck.props.layerFilter(params)) {
+          return false;
+        }
 
-      const layer = params.layer as Layer<MapLibreLayerProps>;
-      return layer.props.beforeId === group.beforeId;
-    },
-    clearStack,
-    clearCanvas: false
-  });
+        const layer = params.layer as Layer<MapLibreLayerProps>;
+        return layer.props.beforeId === group.beforeId;
+      },
+      clearStack,
+      clearCanvas: false
+    });
+  } finally {
+    state?.terrain.setRenderParameters(null);
+  }
 }
 
 function startWatchingMove(map: MapLibreMap, state: MapLibreDeckState): void {
@@ -270,7 +324,10 @@ function getMapLibreViewport(
 function afterMapLibreRender(deck: Deck, map: MapLibreMap): void {
   const deckLayers = flatten(deck.props.layers, Boolean) as Layer<MapLibreLayerProps>[];
   const hasNonMapLibreLayers = deckLayers.some(
-    layer => layer && !map.getLayer(getMapLibreLayerGroupId(layer))
+    layer =>
+      layer &&
+      !(layer instanceof MapLibreTerrainLayer) &&
+      !map.getLayer(getMapLibreLayerGroupId(layer))
   );
   let viewports = deck.getViewports();
   const mapLibreViewportIndex = viewports.findIndex(viewport => viewport.id === MAPLIBRE_VIEW_ID);

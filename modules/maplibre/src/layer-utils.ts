@@ -15,3 +15,10 @@ export function getMapLibreLayerGroupId(layer: Layer<MapLibreLayerProps>): strin
     ? `deck-maplibre-layer-group-before:${layer.props.beforeId}`
     : MAPLIBRE_LAST_LAYER_GROUP_ID;
 }
+
+/** Id of the MapLibre layer that drapes the layers of a group over the terrain */
+export function getMapLibreDrapeGroupId(beforeId?: string): string {
+  return beforeId
+    ? `deck-maplibre-drape-group-before:${beforeId}`
+    : 'deck-maplibre-drape-group-last';
+}

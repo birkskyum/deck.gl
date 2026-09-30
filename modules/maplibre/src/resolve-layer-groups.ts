@@ -5,13 +5,16 @@
 import {_flatten as flatten} from '@deck.gl/core';
 
 import MapLibreLayerGroup from './layer-group';
-import {getMapLibreLayerGroupId} from './layer-utils';
+import MapLibreDrapeGroup from './drape-group';
+import {getMapLibreDrapeGroupId, getMapLibreLayerGroupId} from './layer-utils';
+import {getMapLibreTerrain} from './deck-utils';
 
 import type {Layer, LayersList} from '@deck.gl/core';
 import type {Map as MapLibreMap} from 'maplibre-gl';
 import type {MapLibreLayerProps} from './layer-utils';
 
 const LAYER_GROUPS = new WeakMap<MapLibreMap, Map<string, MapLibreLayerGroup>>();
+const DRAPE_GROUPS = new WeakMap<MapLibreMap, Map<string, MapLibreDrapeGroup>>();
 
 // eslint-disable-next-line complexity, max-statements
 export function resolveMapLibreLayerGroups(
@@ -79,6 +82,55 @@ export function resolveMapLibreLayerGroups(
     const currentGroupIndex = mapLayers.indexOf(groupId);
     if (currentGroupIndex !== expectedGroupIndex - 1) {
       map.moveLayer(groupId, group.beforeId);
+    }
+  }
+
+  resolveMapLibreDrapeGroups(map, layerGroups, newLayerGroupIds);
+}
+
+/**
+ * While the map has terrain, puts a drape group right below each layer group, which draws the
+ * group's draped layers into the terrain tiles.
+ */
+function resolveMapLibreDrapeGroups(
+  map: MapLibreMap,
+  layerGroups: Map<string, MapLibreLayerGroup>,
+  layerGroupIds: Set<string>
+): void {
+  let drapeGroups = DRAPE_GROUPS.get(map);
+  if (!drapeGroups) {
+    drapeGroups = new Map();
+    DRAPE_GROUPS.set(map, drapeGroups);
+  }
+  const terrain = map.getTerrain() ? getMapLibreTerrain(map) : null;
+  const isDraped = (groupId: string) =>
+    Boolean(terrain?.hasDrapedLayers(layerGroups.get(groupId)?.beforeId));
+
+  for (const [groupId, drapeGroup] of drapeGroups) {
+    if (!layerGroupIds.has(groupId) || !isDraped(groupId)) {
+      if (map.getLayer(drapeGroup.id)) {
+        map.removeLayer(drapeGroup.id);
+      }
+      drapeGroups.delete(groupId);
+    }
+  }
+  for (const groupId of layerGroupIds) {
+    if (!isDraped(groupId)) {
+      continue;
+    }
+    const {beforeId} = layerGroups.get(groupId)!;
+    let drapeGroup = drapeGroups.get(groupId);
+    if (!drapeGroup) {
+      drapeGroup = new MapLibreDrapeGroup({id: getMapLibreDrapeGroupId(beforeId), beforeId});
+      drapeGroups.set(groupId, drapeGroup);
+    }
+    if (!map.getLayer(drapeGroup.id)) {
+      map.addLayer(drapeGroup, groupId);
+      continue;
+    }
+    const mapLayers = map.getLayersOrder();
+    if (mapLayers.indexOf(drapeGroup.id) !== mapLayers.indexOf(groupId) - 1) {
+      map.moveLayer(drapeGroup.id, groupId);
     }
   }
 }
