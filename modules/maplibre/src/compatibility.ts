@@ -13,7 +13,10 @@ export type MapLibreHeightMapTarget = {
 export type MapLibreRenderParameters = {
   farZ: number;
   nearZ: number;
-  /** Set while the map has terrain, by MapLibre releases that share their terrain with custom layers */
+  /**
+   * Set in `prerender` while the map has terrain, by MapLibre releases that share their terrain
+   * with custom layers
+   */
   renderTerrainHeightMap?: (target: MapLibreHeightMapTarget) => void;
 };
 
@@ -50,13 +53,25 @@ export function getMapLibreRenderParameters(
   parametersOrMatrix: unknown,
   legacyParameters?: unknown
 ): MapLibreRenderParameters {
+  const parameters = findMapLibreRenderParameters(parametersOrMatrix, legacyParameters);
+  if (!parameters) {
+    throw new Error('MapLibreOverlay interleaved rendering requires MapLibre GL JS 4.5.1 or later');
+  }
+  return parameters;
+}
+
+/** Returns the render parameters among the arguments of a custom layer method, if it got any */
+export function findMapLibreRenderParameters(
+  parametersOrMatrix: unknown,
+  legacyParameters?: unknown
+): MapLibreRenderParameters | null {
   if (isMapLibreRenderParameters(parametersOrMatrix)) {
     return parametersOrMatrix;
   }
   if (isMapLibreRenderParameters(legacyParameters)) {
     return legacyParameters;
   }
-  throw new Error('MapLibreOverlay interleaved rendering requires MapLibre GL JS 4.5.1 or later');
+  return null;
 }
 
 function isMapLibreRenderParameters(value: unknown): value is MapLibreRenderParameters {

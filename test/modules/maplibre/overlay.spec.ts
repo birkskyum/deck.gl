@@ -262,16 +262,16 @@ for (const {version, MapClass} of MAPLIBRE_VERSIONS) {
 }
 
 /**
- * Passes `renderTerrainHeightMap` to the deck.gl layer groups while the map has terrain, as MapLibre
- * releases that share their terrain do. The releases used in tests cannot share it yet.
+ * Passes `renderTerrainHeightMap` to the `prerender` of the deck.gl layer groups while the map has
+ * terrain, as MapLibre releases that share their terrain do. The releases used in tests cannot share it yet.
  */
 function shareTerrain(map: MapLibreMap, renderTerrainHeightMap: (target: any) => void): void {
   for (const id of map.getLayersOrder()) {
     const group = (map.getLayer(id) as any)?.implementation;
     if (id.startsWith('deck-maplibre-layer-group')) {
-      const render = group.render.bind(group);
-      group.render = (gl: WebGL2RenderingContext, options: object) =>
-        render(gl, map.getTerrain() ? {...options, renderTerrainHeightMap} : options);
+      const prerender = group.prerender.bind(group);
+      group.prerender = (gl: WebGL2RenderingContext, options: object) =>
+        prerender(gl, map.getTerrain() ? {...options, renderTerrainHeightMap} : options);
     }
   }
 }

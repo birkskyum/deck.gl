@@ -38,6 +38,8 @@ type MapLibreDeckState = {
   terrainShared: boolean;
   /** Whether MapLibre shared its terrain in the last frame that drew a layer group */
   terrainSharedInFrame: boolean;
+  /** Whether a layer group has built the terrain height map in the current frame */
+  terrainPrerendered: boolean;
 };
 
 const MAPLIBRE_DECK_STATES = new WeakMap<MapLibreMap, MapLibreDeckState>();
@@ -144,13 +146,15 @@ export function createMapLibreDeckInstance(map: MapLibreMap, deck: Deck): Deck {
       if (deck.isInitialized) {
         syncMapLibreElevation(deck, map);
         syncMapLibreTerrain(map, state);
+        state.terrainPrerendered = false;
         afterMapLibreRender(deck, map);
       }
     },
     terrain,
     terrainLayer: new MapLibreTerrainLayer({id: 'maplibre-terrain', externalTerrain: terrain}),
     terrainShared: false,
-    terrainSharedInFrame: false
+    terrainSharedInFrame: false,
+    terrainPrerendered: false
   };
   MAPLIBRE_DECK_STATES.set(map, state);
 
@@ -205,7 +209,7 @@ export function getMapLibreDeckLayers(
 
 /**
  * Adds the terrain layer once MapLibre shares its terrain with custom layers, which it does by passing
- * them `renderTerrainHeightMap` while it has terrain, and removes it after
+ * `renderTerrainHeightMap` to their `prerender` while it has terrain, and removes it after
  */
 function syncMapLibreTerrain(map: MapLibreMap, state: MapLibreDeckState): void {
   if (state.terrainShared === state.terrainSharedInFrame) {
@@ -231,6 +235,44 @@ export function removeMapLibreDeckInstance(map: MapLibreMap): void {
   MAPLIBRE_DECK_STATES.delete(map);
 }
 
+/**
+ * Builds the terrain height map before MapLibre's main pass, which is when MapLibre offers
+ * `renderTerrainHeightMap`: runs the effects of a draw without layers, in which the TerrainEffect
+ * asks for the height map that the layer groups of the frame share
+ */
+export function prerenderMapLibreLayerGroup(
+  deck: Deck,
+  map: MapLibreMap,
+  renderParameters: MapLibreRenderParameters | null
+): void {
+  const state = MAPLIBRE_DECK_STATES.get(map);
+  if (!deck.isInitialized || !state || state.terrainPrerendered) {
+    return;
+  }
+  state.terrainPrerendered = true;
+  state.terrainSharedInFrame = Boolean(renderParameters?.renderTerrainHeightMap);
+  const currentViewport =
+    renderParameters && state.terrainShared && state.terrainSharedInFrame
+      ? getMapLibreViewport(deck, map, renderParameters)
+      : null;
+  if (!currentViewport) {
+    return;
+  }
+  (deck.userData as UserData).currentViewport = currentViewport;
+
+  state.terrain.setRenderParameters(renderParameters);
+  try {
+    deck._drawLayers('maplibre-prerender', {
+      viewports: [currentViewport],
+      layerFilter: () => false,
+      clearStack: true,
+      clearCanvas: false
+    });
+  } finally {
+    state.terrain.setRenderParameters(null);
+  }
+}
+
 export function drawMapLibreLayerGroup(
   deck: Deck,
   map: MapLibreMap,
@@ -253,28 +295,19 @@ export function drawMapLibreLayerGroup(
     return;
   }
 
-  const state = MAPLIBRE_DECK_STATES.get(map);
-  if (state) {
-    state.terrainSharedInFrame = Boolean(renderParameters.renderTerrainHeightMap);
-    state.terrain.setRenderParameters(renderParameters);
-  }
-  try {
-    deck._drawLayers('maplibre-repaint', {
-      viewports: [currentViewport],
-      layerFilter: params => {
-        if (deck.props.layerFilter && !deck.props.layerFilter(params)) {
-          return false;
-        }
+  deck._drawLayers('maplibre-repaint', {
+    viewports: [currentViewport],
+    layerFilter: params => {
+      if (deck.props.layerFilter && !deck.props.layerFilter(params)) {
+        return false;
+      }
 
-        const layer = params.layer as Layer<MapLibreLayerProps>;
-        return layer.props.beforeId === group.beforeId;
-      },
-      clearStack,
-      clearCanvas: false
-    });
-  } finally {
-    state?.terrain.setRenderParameters(null);
-  }
+      const layer = params.layer as Layer<MapLibreLayerProps>;
+      return layer.props.beforeId === group.beforeId;
+    },
+    clearStack,
+    clearCanvas: false
+  });
 }
 
 function startWatchingMove(map: MapLibreMap, state: MapLibreDeckState): void {

@@ -42,7 +42,7 @@ export class MapLibreTerrain {
 
   private map: MapLibreMap;
   private getDevice: () => Device | undefined;
-  /** MapLibre's height map function, during the render call that deck.gl draws in */
+  /** MapLibre's height map function, during the `prerender` call that deck.gl builds the height map in */
   private renderTerrainHeightMap: MapLibreRenderParameters['renderTerrainHeightMap'] | null = null;
   private drapeRenderer: DrapeRenderer | null = null;
   /** The `beforeId` of the layer groups that have draped layers */
@@ -57,7 +57,7 @@ export class MapLibreTerrain {
     map.on('sourcedata', this._onSourceData);
   }
 
-  /** Takes MapLibre's height map function from the render call that deck.gl draws in, or `null` after it */
+  /** Takes MapLibre's height map function from the `prerender` call of a layer group, or `null` after it */
   setRenderParameters(renderParameters: MapLibreRenderParameters | null): void {
     this.renderTerrainHeightMap = renderParameters?.renderTerrainHeightMap ?? null;
   }

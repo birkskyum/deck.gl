@@ -4,8 +4,12 @@
 
 import {assert} from '@deck.gl/core';
 
-import {getMapLibreRenderParameters} from './compatibility';
-import {drawMapLibreLayerGroup, getMapLibreDeckInstance} from './deck-utils';
+import {findMapLibreRenderParameters, getMapLibreRenderParameters} from './compatibility';
+import {
+  drawMapLibreLayerGroup,
+  getMapLibreDeckInstance,
+  prerenderMapLibreLayerGroup
+} from './deck-utils';
 
 import type {CustomLayerInterface, Map as MapLibreMap} from 'maplibre-gl';
 
@@ -36,6 +40,21 @@ export default class MapLibreLayerGroup implements CustomLayerInterface {
 
   onRemove(): void {
     this.map = null;
+  }
+
+  prerender(
+    _gl: WebGLRenderingContext | WebGL2RenderingContext,
+    parametersOrMatrix: unknown,
+    legacyParameters?: unknown
+  ): void {
+    const deck = this.map && getMapLibreDeckInstance(this.map);
+    if (this.map && deck) {
+      prerenderMapLibreLayerGroup(
+        deck,
+        this.map,
+        findMapLibreRenderParameters(parametersOrMatrix, legacyParameters)
+      );
+    }
   }
 
   render(
