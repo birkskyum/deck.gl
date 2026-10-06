@@ -77,7 +77,7 @@ new ScatterplotLayer({
 
 ### Terrain
 
-In interleaved mode, layers with the [TerrainExtension](../extensions/terrain-extension.md) follow MapLibre's terrain, if the MapLibre GL JS version shares it with custom layers (`renderTerrainHeightMap` in their render options and the custom layer method `renderToTerrainTile`). Layers drawn in `offset` mode, such as `ScatterplotLayer`, are raised to the ground on the GPU. Layers drawn in `drape` mode, such as `PathLayer`, are drawn into MapLibre's terrain tiles, at the place in the style given by `beforeId`.
+In interleaved mode, layers with the [TerrainExtension](../extensions/terrain-extension.md) follow MapLibre's terrain with MapLibre GL JS v6.13 or later, which shares its terrain with custom layers through an experimental API. Layers drawn in `offset` mode, such as `ScatterplotLayer`, are raised to the ground on the GPU. Layers drawn in `drape` mode, such as `PathLayer`, are drawn into MapLibre's terrain tiles, at the place in the style given by `beforeId`.
 
 ```ts
 map.setTerrain({source: 'terrain'});
@@ -107,7 +107,7 @@ Draped layers stay pickable. Layers follow the terrain only in the MapLibre view
 
 - MapLibre GL JS v4.5.1, v5, and v6 are supported.
 - Interleaved mode only works when WebGL2 is available.
-- Camera target elevation is synchronized. In interleaved mode, layers with the `TerrainExtension` follow MapLibre terrain, see [Terrain](#terrain).
+- Camera target elevation is synchronized. In interleaved mode with MapLibre GL JS v6.13 or later, layers with the `TerrainExtension` follow MapLibre terrain, see [Terrain](#terrain).
 - Mercator is supported. Globe integration uses deck.gl's experimental [`GlobeView`](../core/globe-view.md). With default back-face culling, `TextLayer` and non-billboard `IconLayer` do not render. Disabling culling makes them visible, but non-billboard icons render rotated 180°.
 - Non-default vertical field of view and camera roll are not synchronized.
 - One interleaved overlay may be attached to a map.

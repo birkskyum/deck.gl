@@ -79,6 +79,8 @@ New experimental multi-canvas foundations allow integrations to associate each `
 
 New [`@deck.gl/maplibre`](./api-reference/maplibre/overview.md) module is forked from the former `@deck.gl/mapbox` module. It provides support for overlaid and interleaved rendering with MapLibre GL JS v4, v5, and the recently released v6.
 
+In interleaved mode, layers with the [`TerrainExtension`](./api-reference/extensions/terrain-extension.md) follow [MapLibre's terrain](./api-reference/maplibre/overview.md#terrain) with MapLibre GL JS v6.13 or later.
+
 ### Layers and Extensions
 
 
