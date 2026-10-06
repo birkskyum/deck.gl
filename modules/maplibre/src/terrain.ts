@@ -15,11 +15,12 @@ const WORLD_SIZE = 512;
 type Bounds = [minX: number, minY: number, maxX: number, maxY: number];
 
 /** Draws the draped layers into a framebuffer, as the TerrainEffect hands it over */
-type DrapeRenderer = (
-  target: Framebuffer,
-  bounds: Bounds,
-  options?: {layerFilter?: (context: FilterContext) => boolean; devicePixelRatio?: number}
-) => void;
+type DrapeRenderer = (opts: {
+  target: Framebuffer;
+  bounds: Bounds;
+  layerFilter?: (context: FilterContext) => boolean;
+  devicePixelRatio?: number;
+}) => void;
 
 /** What MapLibre passes to a custom layer's `renderToTerrainTile` */
 export type TerrainTileInput = {
@@ -33,8 +34,8 @@ export type TerrainTileInput = {
  * expects from the `externalTerrain` prop of a terrain layer
  */
 export class MapLibreTerrain {
-  /** Changes whenever the surface changes other than by camera movement */
-  revision: number = 0;
+  /** Identifies the surface, and changes whenever it changes other than by camera movement */
+  id: string = 'maplibre-terrain-0';
   /** Changes when the draped layers change, so that MapLibre draws its terrain tiles again */
   tileRevision: number = 0;
   /** Called when layer groups gain or lose draped layers */
@@ -45,6 +46,8 @@ export class MapLibreTerrain {
   /** MapLibre's height map function, during the `prerender` call that deck.gl builds the height map in */
   private renderTerrainHeightMap: MapLibreRenderParameters['renderTerrainHeightMap'] | null = null;
   private drapeRenderer: DrapeRenderer | null = null;
+  /** How often the surface has changed, which makes up the `id` */
+  private surfaceChanges: number = 0;
   /** The `beforeId` of the layer groups that have draped layers */
   private drapedBeforeIds: Set<string | undefined> = new Set();
   /** The tile framebuffer of MapLibre, as a luma.gl framebuffer */
@@ -62,7 +65,7 @@ export class MapLibreTerrain {
     this.renderTerrainHeightMap = renderParameters?.renderTerrainHeightMap ?? null;
   }
 
-  renderHeightMap(target: Framebuffer, bounds: Bounds): void {
+  renderHeightMap({target, bounds}: {target: Framebuffer; bounds: Bounds}): void {
     const [minX, minY, maxX, maxY] = bounds;
     this.renderTerrainHeightMap?.({
       texture: target.colorAttachments[0].texture.handle as WebGLTexture,
@@ -123,7 +126,9 @@ export class MapLibreTerrain {
     const minX = (x + tileID.wrap * 2 ** z) * tileSize;
     const maxY = WORLD_SIZE - y * tileSize;
     const cssTileSize = WORLD_SIZE * 2 ** (this.map.getZoom() - z);
-    this.drapeRenderer!(target, [minX, maxY - tileSize, minX + tileSize, maxY], {
+    this.drapeRenderer!({
+      target,
+      bounds: [minX, maxY - tileSize, minX + tileSize, maxY],
       layerFilter,
       devicePixelRatio: width / cssTileSize
     });
@@ -166,12 +171,12 @@ export class MapLibreTerrain {
   }
 
   private _onTerrainChange = () => {
-    this.revision++;
+    this.id = `maplibre-terrain-${++this.surfaceChanges}`;
   };
 
   private _onSourceData = (event: {sourceId?: string}) => {
     if (event.sourceId && event.sourceId === this.map.getTerrain()?.source) {
-      this.revision++;
+      this._onTerrainChange();
     }
   };
 }
