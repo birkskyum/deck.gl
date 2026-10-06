@@ -10,9 +10,11 @@ import {device} from '@deck.gl/test-utils';
 import {Map as MapLibreV4Map} from 'maplibre-gl-v4';
 import {Map as MapLibreV5Map} from 'maplibre-gl-v5';
 import {Map as MapLibreV6Map} from 'maplibre-gl-v6';
+import {Map as MapLibreV613Map} from 'maplibre-gl-v6-13';
 import {test, expect, vi} from 'vitest';
 
 import {getMapLibreElevation} from '../../../modules/maplibre/src/compatibility';
+import MapLibreDrapeGroup from '../../../modules/maplibre/src/drape-group';
 
 import type {Map as MapLibreMap} from 'maplibre-gl-v6';
 
@@ -71,8 +73,9 @@ async function createDemTileURL(elevation: number): Promise<string> {
   return URL.createObjectURL(blob!);
 }
 
-// Aliases in modules/maplibre/package.json pin the earliest supported release of each major.
-// Add an alias, import, and entry here when supporting a new major.
+// Aliases in modules/maplibre/package.json pin the earliest supported release of each major, and
+// 6.13.0 as the earliest that shares its terrain. Add an alias, import, and entry here when
+// supporting a new major.
 const MAPLIBRE_VERSIONS = [
   {version: '4.5.1', MapClass: MapLibreV4Map},
   {version: '5.0.0', MapClass: MapLibreV5Map},
@@ -261,21 +264,6 @@ for (const {version, MapClass} of MAPLIBRE_VERSIONS) {
   });
 }
 
-/**
- * Passes `renderTerrainHeightMap` to the `prerender` of the deck.gl layer groups while the map has
- * terrain, as MapLibre releases that share their terrain do. The releases used in tests cannot share it yet.
- */
-function shareTerrain(map: MapLibreMap, renderTerrainHeightMap: (target: any) => void): void {
-  for (const id of map.getLayersOrder()) {
-    const group = (map.getLayer(id) as any)?.implementation;
-    if (id.startsWith('deck-maplibre-layer-group')) {
-      const prerender = group.prerender.bind(group);
-      group.prerender = (gl: WebGL2RenderingContext, options: object) =>
-        prerender(gl, map.getTerrain() ? {...options, renderTerrainHeightMap} : options);
-    }
-  }
-}
-
 /** Returns the north-west corner of a tile, or of a fraction of one */
 function tileToLngLat(x: number, y: number, z: number): [number, number] {
   const n = Math.PI - (2 * Math.PI * y) / 2 ** z;
@@ -295,7 +283,8 @@ webglTest('MapLibreOverlay shares MapLibre terrain with TerrainExtension layers'
   const trailLatitude = tileToLngLat(0, tile.canonical.y + 0.25, 13)[1];
   const center: [number, number] = [(west + east) / 2, (north + south) / 2];
 
-  const map = new MapLibreV6Map({
+  // MapLibre 6.13.0 is the earliest release that shares its terrain with custom layers
+  const map = new MapLibreV613Map({
     container,
     style: {
       version: 8,
@@ -304,19 +293,11 @@ webglTest('MapLibreOverlay shares MapLibre terrain with TerrainExtension layers'
     },
     center,
     zoom: 13,
+    pitch: 60,
     attributionControl: false
   }) as unknown as MapLibreMap;
   const gl = map.getCanvas().getContext('webgl2')!;
-  // The ground is 1000 meters high
-  const renderTerrainHeightMap = vi.fn(({texture}: {texture: WebGLTexture}) => {
-    const framebuffer = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
-    gl.disable(gl.SCISSOR_TEST);
-    gl.clearBufferfv(gl.COLOR, 0, [1000, 0, 0, 1]);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.deleteFramebuffer(framebuffer);
-  });
+  const renderToTerrainTile = vi.spyOn(MapLibreDrapeGroup.prototype, 'renderToTerrainTile');
 
   try {
     await new Promise<void>(resolve => map.once('load', () => resolve()));
@@ -353,7 +334,6 @@ webglTest('MapLibreOverlay shares MapLibre terrain with TerrainExtension layers'
     map.addControl(overlay);
     await waitForRender(() => Boolean(overlay._deck?.isInitialized));
     const getDeckLayerIds = () => flatten(overlay._deck!.props.layers, Boolean).map(l => l.id);
-    shareTerrain(map, renderTerrainHeightMap);
 
     map.setTerrain({source: 'dem'});
     await waitForRender(
@@ -371,24 +351,24 @@ webglTest('MapLibreOverlay shares MapLibre terrain with TerrainExtension layers'
       .implementation;
     expect(drapeGroup.terrainTileRevision, 'Terrain tiles are drawn again').toBeGreaterThan(0);
 
-    // The hut is placed by a height map of MapLibre's terrain
-    expect(renderTerrainHeightMap).toHaveBeenCalled();
-    const [{texture, width, height, bounds}] = renderTerrainHeightMap.mock.lastCall!;
-    expect(texture).toBeInstanceOf(WebGLTexture);
-    expect(width > 0 && height > 0).toBe(true);
-    const x = (tile.canonical.x + 0.5) / 2 ** 13;
-    const y = (tile.canonical.y + 0.5) / 2 ** 13;
-    expect(
-      bounds[0] < x && x < bounds[2] && bounds[1] < y && y < bounds[3],
-      'Height map bounds'
-    ).toBe(true);
+    // The ground is 1000 meters high, where both layers are picked. At sea level they would be
+    // drawn well below it on the pitched map.
+    const pick = (position: number[]) => {
+      const [x, y] = overlay._deck!.getViewports()[0].project(position);
+      return overlay.pickObject({x, y, radius: 2})?.layer?.id;
+    };
+    await waitForRender(
+      () => pick([...center, 1000]) === 'hut',
+      () => map.triggerRepaint()
+    );
+    expect(pick([...center, 0]), 'Nothing at sea level').toBeUndefined();
+    expect(pick([center[0] + 0.01, trailLatitude, 1000])).toBe('trail');
 
-    // Both layers are picked on the ground
-    const viewport = overlay._deck!.getViewports()[0];
-    const [hutX, hutY] = viewport.project([...center, 1000]);
-    expect(overlay.pickObject({x: hutX, y: hutY})?.layer?.id).toBe('hut');
-    const [trailX, trailY] = viewport.project([center[0] + 0.01, trailLatitude, 1000]);
-    expect(overlay.pickObject({x: trailX, y: trailY})?.layer?.id).toBe('trail');
+    // MapLibre draws the trail into its terrain tiles
+    await waitForRender(
+      () => renderToTerrainTile.mock.calls.length > 0,
+      () => map.triggerRepaint()
+    );
 
     // The trail is draped into the terrain tile, north up with the first row south
     const texture2 = gl.createTexture();
@@ -429,6 +409,7 @@ webglTest('MapLibreOverlay shares MapLibre terrain with TerrainExtension layers'
     ]);
     map.removeControl(overlay);
   } finally {
+    renderToTerrainTile.mockRestore();
     map.remove();
     container.remove();
     URL.revokeObjectURL(demTileURL);

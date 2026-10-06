@@ -138,7 +138,7 @@ const optimizeDepsConfig = {
     'd3-hexbin'
   ],
   // MapLibre v6 is native ESM. Add future ESM-only major aliases here.
-  exclude: ['maplibre-gl-v6']
+  exclude: ['maplibre-gl-v6', 'maplibre-gl-v6-13']
 };
 
 // Server configuration for serving test data files with correct MIME types
