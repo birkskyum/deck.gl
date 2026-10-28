@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) vis.gl contributors
 
-import {getMapLibreDeckInstance, getMapLibreTerrain} from './deck-utils';
+import {getMapLibreTerrain} from './deck-utils';
 
 import type {FilterContext, Layer} from '@deck.gl/core';
 import type {CustomLayerInterface, Map as MapLibreMap} from 'maplibre-gl';
@@ -46,15 +46,15 @@ export default class MapLibreDrapeGroup implements CustomLayerInterface {
 
   renderToTerrainTile(gl: WebGL2RenderingContext, input: TerrainTileInput): void {
     const map = this.map;
-    const deck = map && getMapLibreDeckInstance(map);
-    if (!map || !deck) {
+    if (!map) {
       return;
     }
-    getMapLibreTerrain(map)?.drawTile(gl, input, (params: FilterContext) => {
-      if (deck.props.layerFilter && !deck.props.layerFilter(params)) {
-        return false;
-      }
-      return (params.layer as Layer<MapLibreLayerProps>).props.beforeId === this.beforeId;
-    });
+    // The TerrainEffect applies Deck's own layerFilter on top of this one
+    getMapLibreTerrain(map)?.drawTile(
+      gl,
+      input,
+      (params: FilterContext) =>
+        (params.layer as Layer<MapLibreLayerProps>).props.beforeId === this.beforeId
+    );
   }
 }
