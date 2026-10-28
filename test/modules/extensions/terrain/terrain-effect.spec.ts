@@ -10,6 +10,7 @@ import {TERRAIN_MODE} from '@deck.gl/extensions/terrain/shader-module';
 import {GeoJsonLayer, ScatterplotLayer, SolidPolygonLayer} from '@deck.gl/layers';
 import {TerrainLayer} from '@deck.gl/geo-layers';
 import {TerrainLoader} from '@loaders.gl/terrain';
+import {Matrix4} from '@math.gl/core';
 
 import type {Framebuffer} from '@luma.gl/core';
 import type {ExternalTerrain} from '@deck.gl/extensions/terrain/external-terrain';
@@ -363,6 +364,17 @@ test('TerrainEffect#external terrain', async () => {
   expect(Array.from(device.readPixelsToArrayWebGL(tile)), 'Layer filter').toEqual(
     new Array(64).fill(0)
   );
+  lifecycle.effectContext.deck.props.layerFilter = ({layer}) => layer.id !== 'glacier';
+  renderDrape({target: tile, bounds: tileBounds});
+  expect(Array.from(device.readPixelsToArrayWebGL(tile)), "Deck's layer filter").toEqual(
+    new Array(64).fill(0)
+  );
+  renderDrape({target: tile, bounds: tileBounds, layerFilter: () => true});
+  expect(
+    Array.from(device.readPixelsToArrayWebGL(tile)),
+    "Deck's layer filter and the host's"
+  ).toEqual(new Array(64).fill(0));
+  lifecycle.effectContext.deck.props.layerFilter = null;
   tile.destroy();
 
   // A host that draws the layers in groups shares one height map between them
@@ -443,6 +455,26 @@ test('TerrainEffect#external terrain', async () => {
   expect(terrainEffect.terrainCovers.size, 'Terrain covers are released').toBe(0);
   expect(groundCover.destroyed, 'Terrain cover is destroyed').toBe(true);
 
+  // Hidden terrain layers do not take precedence
+  await lifecycle.update({
+    layers: [
+      new SolidPolygonLayer({
+        id: 'ground',
+        data: [GLACIER],
+        getPolygon: d => d,
+        operation: 'terrain',
+        visible: false
+      }),
+      externalTerrainLayer,
+      summitLayer,
+      glacierLayer
+    ]
+  });
+  expect(externalTerrain.setDrapeRenderer).toHaveBeenLastCalledWith(renderDrape);
+  expect(getLayerUniforms(summitLayer).mode, 'TERRAIN_MODE.USE_HEIGHT_MAP_METERS').toBe(
+    TERRAIN_MODE.USE_HEIGHT_MAP_METERS
+  );
+
   // Without terrain, layers draw as usual
   await lifecycle.update({layers: [summitLayer, glacierLayer]});
   expect(getLayerUniforms(summitLayer).mode, 'TERRAIN_MODE.NONE').toBe(TERRAIN_MODE.NONE);
@@ -502,6 +534,17 @@ webglTest('TerrainEffect#picks layers draped over external terrain', async () =>
         pickable: true,
         extensions: [new TerrainExtension()]
       }),
+      new ScatterplotLayer({
+        id: 'hut',
+        data: [[8.012, 46.5]],
+        getPosition: d => d,
+        getRadius: 10,
+        radiusUnits: 'pixels',
+        // Scales the heights of the layer's data, which the ground height is not
+        modelMatrix: new Matrix4().scale([1, 1, 2]),
+        pickable: true,
+        extensions: [new TerrainExtension()]
+      }),
       ...[
         ['west', [8.006, 46.502]],
         ['east', [8.018, 46.498]]
@@ -535,6 +578,13 @@ webglTest('TerrainEffect#picks layers draped over external terrain', async () =>
     expect(pick([8.018, 46.498, 0]), 'Nothing where the draped layer would be at sea level').toBe(
       null
     );
+    expect(pick([8.012, 46.5, 2000])?.layer?.id, 'Point on the terrain with a model matrix').toBe(
+      'hut'
+    );
+    const [x, y] = viewport.project([8.003, 46.502, 2000]);
+    const picked = deck.pickObject({x, y, unproject3D: true});
+    expect(picked?.layer?.id, 'Draped layer picked in 3D').toBe('west');
+    expect(picked?.coordinate?.[2], 'Coordinate on the terrain').toBeCloseTo(2000, -2);
   } finally {
     deck.finalize();
     webglContext!.getExtension('WEBGL_lose_context')?.loseContext();

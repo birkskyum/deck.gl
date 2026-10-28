@@ -14,7 +14,7 @@ import {TerrainPickingSurface} from './terrain-picking-surface';
 import {getExternalTerrain} from './external-terrain';
 import {makeViewport} from '../utils/projection-utils';
 
-import type {Effect, EffectContext, PreRenderOptions, Layer, Viewport} from '@deck.gl/core';
+import type {Deck, Effect, EffectContext, PreRenderOptions, Layer, Viewport} from '@deck.gl/core';
 import type {ExternalTerrain, ExternalTerrainDrapeRenderer} from './external-terrain';
 
 /**
@@ -53,13 +53,17 @@ export class TerrainEffect implements Effect {
   /** True if a terrain layer is present, which offset and draped layers follow */
   private hasTerrain: boolean = false;
   private device?: Device;
+  private deck?: Deck<any>;
   /** Stands in for the external terrain in the picking buffer, once draped layers are pickable */
   private pickingSurface?: TerrainPickingSurface;
   /** True if the external terrain layer draws the picking surface in the current picking pass */
   private drawsPickingSurface: boolean = false;
+  /** True if the current picking pass draws depth rather than picking colors */
+  private isPickingZ: boolean = false;
 
   setup({device, deck}: EffectContext) {
     this.device = device;
+    this.deck = deck;
     this.dummyHeightMap = device.createTexture({
       width: 1,
       height: 1,
@@ -81,9 +85,12 @@ export class TerrainEffect implements Effect {
   preRender(opts: PreRenderOptions): void {
     this.drawsPickingSurface = false;
     // @ts-expect-error pickZ only defined in picking pass
-    if (opts.pickZ) {
+    this.isPickingZ = Boolean(opts.pickZ);
+    if (this.isPickingZ) {
       // Do not update if picking attributes
       this.isDrapingEnabled = false;
+      // The external terrain layer draws the depth of the surface that the picking pass drew
+      this.drawsPickingSurface = Boolean(this.externalTerrain && this.pickingSurface);
       return;
     }
 
@@ -102,9 +109,10 @@ export class TerrainEffect implements Effect {
     if (!isPicking) {
       // Includes terrain layers that have not loaded yet, which keep the draped layers hidden
       const allTerrainLayers = opts.layers.filter(l => l.props.operation.includes('terrain'));
-      // Terrain layers that deck.gl draws take precedence over terrain drawn by another renderer
-      const externalTerrainLayer = allTerrainLayers.every(getExternalTerrain)
-        ? allTerrainLayers[0]
+      // Visible terrain layers that deck.gl draws take precedence over terrain drawn by another renderer
+      const visibleTerrainLayers = allTerrainLayers.filter(l => l.props.visible);
+      const externalTerrainLayer = visibleTerrainLayers.every(getExternalTerrain)
+        ? visibleTerrainLayers[0]
         : undefined;
       this._setExternalTerrain(
         externalTerrainLayer ? getExternalTerrain(externalTerrainLayer) : null
@@ -194,6 +202,7 @@ export class TerrainEffect implements Effect {
 
   cleanup({deck}: EffectContext): void {
     this._setExternalTerrain(null);
+    this.deck = undefined;
 
     this.pickingSurface?.delete();
     this.pickingSurface = undefined;
@@ -355,7 +364,8 @@ export class TerrainEffect implements Effect {
         renderPass,
         parameters,
         project: shaderModuleProps.project,
-        heightMap
+        heightMap,
+        depth: this.isPickingZ
       });
     }
   };
@@ -415,11 +425,13 @@ export class TerrainEffect implements Effect {
     if (!viewport) {
       return;
     }
+    const deckLayerFilter = this.deck?.props.layerFilter;
     this.terrainPass.renderDrapedLayers(target, viewport, {
       ...drape.opts,
       views: undefined,
       layers,
-      layerFilter,
+      layerFilter: context =>
+        (!deckLayerFilter || deckLayerFilter(context)) && (!layerFilter || layerFilter(context)),
       shaderModuleProps: {
         terrain: {
           dummyHeightMap: this.dummyHeightMap,
