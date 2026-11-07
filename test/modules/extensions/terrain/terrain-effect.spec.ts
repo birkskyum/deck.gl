@@ -373,7 +373,13 @@ test('TerrainEffect#external terrain', async () => {
   expect(Array.from(device.readPixelsToArrayWebGL(tile)), 'Layer filter').toEqual(
     new Array(64).fill(0)
   );
+  externalTerrain.onDrapeChange.mockClear();
   lifecycle.effectContext.deck.props.layerFilter = ({layer}) => layer.id !== 'glacier';
+  lifecycle.render();
+  expect(
+    externalTerrain.onDrapeChange,
+    "Deck's layer filter changes what the draped layers draw"
+  ).toHaveBeenCalledTimes(1);
   renderDrape({target: tile, bounds: tileBounds});
   expect(Array.from(device.readPixelsToArrayWebGL(tile)), "Deck's layer filter").toEqual(
     new Array(64).fill(0)
@@ -435,6 +441,20 @@ test('TerrainEffect#external terrain', async () => {
   expect(otherTerrain.onDrapeChange).toHaveBeenLastCalledWith([glacierLayer]);
   externalTerrainLayer = new ExternalTerrainLayer({id: 'external-terrain', externalTerrain});
   await lifecycle.update({layers: [externalTerrainLayer, summitLayer, hutLayer, glacierLayer]});
+
+  // A terrain layer that is still loading leaves the meters in the height map until it draws
+  await lifecycle.update({
+    layers: [
+      new LoadingTerrainLayer({id: 'loading-terrain', operation: 'terrain+draw'}),
+      externalTerrainLayer,
+      summitLayer,
+      glacierLayer
+    ]
+  });
+  expect(externalTerrain.setDrapeRenderer).toHaveBeenLastCalledWith(null);
+  expect(getLayerUniforms(summitLayer).mode, 'Height map still in meters').toBe(
+    TERRAIN_MODE.USE_HEIGHT_MAP_METERS
+  );
 
   // Terrain layers take precedence
   externalTerrain.renderHeightMap.mockClear();
