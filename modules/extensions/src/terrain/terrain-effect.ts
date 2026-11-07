@@ -5,7 +5,7 @@
 import {Device, Parameters, RenderPass, Texture} from '@luma.gl/core';
 import {log} from '@deck.gl/core';
 
-import {terrainModule, TerrainModuleProps} from './shader-module';
+import {terrainPlugin, TerrainModuleProps} from './shader-module';
 import {TerrainCover} from './terrain-cover';
 import {TerrainPass} from './terrain-pass';
 import {TerrainPickingPass, TerrainPickingPassRenderOptions} from './terrain-picking-pass';
@@ -79,7 +79,7 @@ export class TerrainEffect implements Effect {
       log.warn('Terrain offset mode is not supported by this browser')();
     }
 
-    deck._addDefaultShaderModule(terrainModule);
+    deck._addDefaultShaderPlugin(terrainPlugin);
   }
 
   preRender(opts: PreRenderOptions): void {
@@ -109,10 +109,13 @@ export class TerrainEffect implements Effect {
     if (!isPicking) {
       // Includes terrain layers that have not loaded yet, which keep the draped layers hidden
       const allTerrainLayers = opts.layers.filter(l => l.props.operation.includes('terrain'));
-      // Visible terrain layers that deck.gl draws take precedence over terrain drawn by another renderer
+      // Visible terrain layers take precedence over hidden ones, and those that deck.gl draws over
+      // terrain drawn by another renderer
       const visibleTerrainLayers = allTerrainLayers.filter(l => l.props.visible);
-      const externalTerrainLayer = visibleTerrainLayers.every(getExternalTerrain)
-        ? visibleTerrainLayers[0]
+      const leadingTerrainLayers =
+        visibleTerrainLayers.length > 0 ? visibleTerrainLayers : allTerrainLayers;
+      const externalTerrainLayer = leadingTerrainLayers.every(getExternalTerrain)
+        ? leadingTerrainLayers[0]
         : undefined;
       this._setExternalTerrain(
         externalTerrainLayer ? getExternalTerrain(externalTerrainLayer) : null
@@ -222,7 +225,7 @@ export class TerrainEffect implements Effect {
     }
     this.terrainCovers.clear();
 
-    deck._removeDefaultShaderModule(terrainModule);
+    deck._removeDefaultShaderPlugin(terrainPlugin);
   }
 
   private _updateHeightMap(terrainLayers: Layer[], viewport: Viewport, opts: PreRenderOptions) {
@@ -308,6 +311,7 @@ export class TerrainEffect implements Effect {
       width: Math.ceil(renderViewport.width),
       height: Math.ceil(renderViewport.height)
     });
+    target.device.beginRenderPass({framebuffer: target, clearColor: [0, 0, 0, 0]}).end();
     externalTerrain.renderHeightMap({target, bounds});
     this.externalHeightMapId = externalTerrain.id;
   }
